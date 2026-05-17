@@ -4,6 +4,7 @@ import { CalendarDays, StickyNote, Bell, Settings as SettingsIcon, Shield } from
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import { supabase } from './lib/supabase'
 import { showLocalNotification, requestNotificationPermission } from './lib/notifications'
+import { isBiometricEnabled } from './lib/biometric'
 
 import Login from './pages/Login'
 import Signup from './pages/Signup'
@@ -14,6 +15,7 @@ import Notes from './pages/Notes'
 import Settings from './pages/Settings'
 import Admin from './pages/Admin'
 import NotificationsPanel from './components/NotificationsPanel'
+import BiometricLock from './components/BiometricLock'
 
 import './styles/global.css'
 
@@ -23,6 +25,20 @@ function MainApp() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [showNotifs, setShowNotifs] = useState(false)
   const [installPrompt, setInstallPrompt] = useState(null)
+  
+  // État du verrou biométrique
+  const [locked, setLocked] = useState(() => isBiometricEnabled())
+
+  // Quand l'app revient au premier plan, on reverrouille si biométrie activée
+  useEffect(() => {
+    function handleVisibility() {
+      if (document.visibilityState === 'visible' && isBiometricEnabled()) {
+        setLocked(true)
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
 
   useEffect(() => {
     const handler = (e) => {
@@ -78,6 +94,11 @@ function MainApp() {
   }
 
   if (!user) return <Navigate to="/login" replace />
+
+  // Écran de déverrouillage biométrique
+  if (locked) {
+    return <BiometricLock onUnlock={() => setLocked(false)} />
+  }
 
   const titles = {
     calendar: 'Calendrier',
