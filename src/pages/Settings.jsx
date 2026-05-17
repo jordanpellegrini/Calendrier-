@@ -1,16 +1,24 @@
-import { useState } from 'react'
-import { LogOut, Download, Bell, Link2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { LogOut, Download, Bell, Link2, Fingerprint } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { COLORS, NOTE_COLORS } from '../lib/dateUtils'
 import { requestNotificationPermission } from '../lib/notifications'
+import { isBiometricAvailable, isBiometricEnabled, enableBiometric, disableBiometric } from '../lib/biometric'
 
 export default function Settings({ installPrompt, onInstall }) {
-  const { profile, refreshProfile, signOut } = useAuth()
+  const { user, profile, refreshProfile, signOut } = useAuth()
   const [partnerEmail, setPartnerEmail] = useState('')
   const [linkMsg, setLinkMsg] = useState('')
   const [linking, setLinking] = useState(false)
-  const [notifStatus, setNotifStatus] = useState(Notification.permission)
+  const [notifStatus, setNotifStatus] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported')
+  const [bioAvailable, setBioAvailable] = useState(false)
+  const [bioEnabled, setBioEnabled] = useState(isBiometricEnabled())
+  const [bioMsg, setBioMsg] = useState('')
+
+  useEffect(() => {
+    isBiometricAvailable().then(setBioAvailable)
+  }, [])
 
   async function updateProfile(updates) {
     await supabase.from('profiles').update(updates).eq('id', profile.id)
@@ -40,7 +48,6 @@ export default function Settings({ installPrompt, onInstall }) {
       return
     }
     
-    // Lier bidirectionnellement
     await supabase.from('profiles').update({ partner_id: partner.id }).eq('id', profile.id)
     await supabase.from('profiles').update({ partner_id: profile.id }).eq('id', partner.id)
     
@@ -64,6 +71,28 @@ export default function Settings({ installPrompt, onInstall }) {
     setNotifStatus(result)
   }
 
+  async function handleToggleBio() {
+    setBioMsg('')
+    if (bioEnabled) {
+      if (!confirm('Désactiver le déverrouillage biométrique ?')) return
+      disableBiometric()
+      setBioEnabled(false)
+      setBioMsg('Biométrie désactivée')
+    } else {
+      try {
+        await enableBiometric(user.id, user.email)
+        setBioEnabled(true)
+        setBioMsg('✅ Biométrie activée — testée au prochain démarrage')
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          setBioMsg('❌ Enregistrement annulé')
+        } else {
+          setBioMsg('❌ ' + (err.message || 'Erreur'))
+        }
+      }
+    }
+  }
+
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Paramètres</h2>
@@ -72,7 +101,7 @@ export default function Settings({ installPrompt, onInstall }) {
         <div className="install-banner">
           <div>
             <strong>Installer l'app</strong>
-            <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>Ajoute Planning à ton écran d'accueil</div>
+            <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>Ajoute Calendrier à ton écran d'accueil</div>
           </div>
           <button onClick={onInstall}>
             <Download size={16} style={{ verticalAlign: 'middle' }} /> Installer
@@ -114,6 +143,32 @@ export default function Settings({ installPrompt, onInstall }) {
             </button>
             {linkMsg && <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>{linkMsg}</p>}
           </>
+        )}
+      </div>
+
+      <div className="settings-section">
+        <h3>Sécurité</h3>
+        <div className="settings-row">
+          <div className="label">
+            <div className="title">Déverrouillage biométrique</div>
+            <div className="desc">
+              {!bioAvailable ? '⚠️ Non disponible sur cet appareil' :
+               bioEnabled ? '🔒 Activé — empreinte requise à chaque ouverture' :
+               'Utilise ton empreinte ou ton visage pour déverrouiller l\'app'}
+            </div>
+          </div>
+          {bioAvailable && (
+            <label className="toggle">
+              <input type="checkbox" checked={bioEnabled} onChange={handleToggleBio} />
+              <span className="toggle-slider"></span>
+            </label>
+          )}
+        </div>
+        {bioMsg && <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>{bioMsg}</p>}
+        {!bioAvailable && (
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+            La biométrie nécessite Android 9+ ou iOS 16+, et un appareil avec empreinte/Face Unlock configuré. Sur PWA installée pour de meilleurs résultats.
+          </p>
         )}
       </div>
 
