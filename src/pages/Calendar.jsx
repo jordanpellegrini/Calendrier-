@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Upload, Users } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Upload, Users, Repeat } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { 
@@ -9,17 +9,17 @@ import {
 import EventModal from '../components/EventModal'
 import ImportICSModal from '../components/ImportICSModal'
 import { rescheduleAllReminders } from '../lib/notifications'
+import { expandRecurrence } from '../lib/recurrence'
 
 export default function Calendar() {
   const { user, profile } = useAuth()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [view, setView] = useState(profile?.default_view || 'month')
-  const [events, setEvents] = useState([])
+  const [rawEvents, setRawEvents] = useState([])
   const [selectedDate, setSelectedDate] = useState(null)
   const [editingEvent, setEditingEvent] = useState(null)
   const [showImport, setShowImport] = useState(false)
   const [loading, setLoading] = useState(true)
-  // Map userId -> { signature_color, display_name } pour distinguer les créateurs
   const [userColors, setUserColors] = useState({})
 
   const weekStartsOn = profile?.week_starts_on ?? 1
@@ -40,7 +40,6 @@ export default function Calendar() {
   }, [profile])
 
   async function loadUserColors() {
-    // Charge la couleur signature de l'utilisateur + son partenaire
     const ids = [profile.id]
     if (profile.partner_id) ids.push(profile.partner_id)
     
@@ -91,12 +90,33 @@ export default function Calendar() {
       if (from > 20000) keepGoing = false
     }
     
-    setEvents(all)
+    setRawEvents(all)
     rescheduleAllReminders(all.filter(e => e.user_id === profile.id && e.reminder_minutes !== null))
     setLoading(false)
   }
 
-  // Renvoie la couleur signature du créateur de l'event (bordure)
+  // Expansion des événements récurrents sur la plage affichée
+  const events = useMemo(() => {
+    // Plage étendue : 2 mois avant le mois courant à 2 ans après
+    const rangeStart = new Date(currentDate)
+    rangeStart.setMonth(rangeStart.getMonth() - 2)
+    rangeStart.setDate(1)
+    const rangeEnd = new Date(currentDate)
+    rangeEnd.setFullYear(rangeEnd.getFullYear() + 2)
+    
+    const expanded = []
+    rawEvents.forEach(ev => {
+      if (ev.recurrence_rule) {
+        // Ne pas inclure l'événement parent lui-même, juste les occurrences
+        const occs = expandRecurrence(ev, rangeStart, rangeEnd)
+        expanded.push(...occs)
+      } else {
+        expanded.push(ev)
+      }
+    })
+    return expanded
+  }, [rawEvents, currentDate])
+
   function getCreatorColor(event) {
     return userColors[event.user_id]?.color || '#f56565'
   }
@@ -138,7 +158,6 @@ export default function Calendar() {
 
   if (loading) return <div className="center-spinner"><div className="spinner"></div></div>
 
-  // Légende des couleurs créateurs (visible uniquement si partenaire lié)
   const showLegend = profile?.partner_id && Object.keys(userColors).length >= 2
 
   return (
@@ -258,11 +277,11 @@ function MonthView({ currentDate, setCurrentDate, monthGrid, weekStartsOn, getEv
                     className="event-pill" 
                     style={{ 
                       background: e.color, 
-                      border: `1.5px solid ${creatorColor}`,
-                      boxShadow: `inset 0 0 0 1px white`
+                      border: `1.5px solid ${creatorColor}`
                     }}
                   >
                     {e.shared && <Users size={8} />}
+                    {(e._virtualOccurrence || e.recurrence_rule) && <Repeat size={8} />}
                     {e.title}
                   </div>
                 )
@@ -316,7 +335,6 @@ function WeekView({ currentDate, setCurrentDate, weekStartsOn, getEventsForDay, 
                         key={e.id} 
                         className="event-item" 
                         style={{ 
-                          borderLeftColor: e.color,
                           border: `2px solid ${creatorColor}`,
                           borderLeft: `4px solid ${e.color}`
                         }} 
@@ -324,6 +342,7 @@ function WeekView({ currentDate, setCurrentDate, weekStartsOn, getEventsForDay, 
                       >
                         <div className="event-time">{e.all_day ? 'Journée' : fmtTime(e.start_at)}</div>
                         <div className="event-title">{e.title}</div>
+                        {(e._virtualOccurrence || e.recurrence_rule) && <Repeat size={14} style={{ color: 'var(--text-muted)' }} />}
                         {e.shared && <Users size={14} className="shared-icon" />}
                       </div>
                     )
@@ -369,6 +388,7 @@ function DayView({ currentDate, setCurrentDate, events, onEventClick, getCreator
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <span className="event-title">{e.title}</span>
+                      {(e._virtualOccurrence || e.recurrence_rule) && <Repeat size={14} style={{ color: 'var(--text-muted)' }} />}
                       {e.shared && <Users size={14} className="shared-icon" />}
                     </div>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -391,7 +411,9 @@ function DayView({ currentDate, setCurrentDate, events, onEventClick, getCreator
 
 function AgendaView({ events, onEventClick, getCreatorColor }) {
   const now = new Date()
-  const upcoming = events.filter(e => new Date(e.end_at) >= now).slice(0, 200)
+  const upcoming = events.filter(e => new Date(e.end_at) >= now)
+    .sort((a, b) => new Date(a.start_at) - new Date(b.start_at))
+    .slice(0, 200)
   
   const grouped = {}
   upcoming.forEach(e => {
@@ -425,6 +447,7 @@ function AgendaView({ events, onEventClick, getCreatorColor }) {
                     >
                       <div className="event-time">{e.all_day ? 'Journée' : fmtTime(e.start_at)}</div>
                       <div className="event-title">{e.title}</div>
+                      {(e._virtualOccurrence || e.recurrence_rule) && <Repeat size={14} style={{ color: 'var(--text-muted)' }} />}
                       {e.shared && <Users size={14} className="shared-icon" />}
                     </div>
                   )
