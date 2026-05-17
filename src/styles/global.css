@@ -290,6 +290,7 @@ input, textarea, select {
   flex: 1;
   padding: 1.25rem;
   overflow-y: auto;
+  min-width: 0;
 }
 
 /* ============ BOTTOM NAV ============ */
@@ -418,15 +419,17 @@ input, textarea, select {
   box-shadow: 0 2px 8px rgba(245, 101, 101, 0.3);
 }
 
-/* ============ MONTH GRID ============ */
+/* ============ MONTH GRID — FIX OVERFLOW ============ */
 .month-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   background: var(--surface);
   border-radius: var(--radius);
   overflow: hidden;
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
+  width: 100%;
+  table-layout: fixed;
 }
 
 .day-name {
@@ -439,11 +442,13 @@ input, textarea, select {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  min-width: 0;
 }
 
 .day-cell {
   min-height: 78px;
-  padding: 6px;
+  padding: 4px 2px;
   border-right: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
   background: var(--surface);
@@ -453,6 +458,8 @@ input, textarea, select {
   flex-direction: column;
   gap: 2px;
   transition: background 0.15s;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .day-cell:hover {
@@ -473,34 +480,41 @@ input, textarea, select {
   background: var(--gradient);
   color: white;
   border-radius: 50%;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(245, 101, 101, 0.4);
+  font-size: 0.8rem;
 }
 
 .day-number {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-soft);
 }
 
 .event-pill {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   background: var(--primary);
   color: white;
-  padding: 2px 6px;
-  border-radius: 6px;
+  padding: 1px 4px;
+  border-radius: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   font-weight: 500;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.event-pill svg {
+  flex-shrink: 0;
 }
 
 /* ============ DAY/WEEK VIEWS ============ */
