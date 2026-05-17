@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { CalendarDays, StickyNote, Bell, Settings as SettingsIcon, Shield } from 'lucide-react'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import { supabase } from './lib/supabase'
@@ -24,7 +24,6 @@ function MainApp() {
   const [showNotifs, setShowNotifs] = useState(false)
   const [installPrompt, setInstallPrompt] = useState(null)
 
-  // PWA install prompt
   useEffect(() => {
     const handler = (e) => {
       e.preventDefault()
@@ -41,13 +40,9 @@ function MainApp() {
     if (outcome === 'accepted') setInstallPrompt(null)
   }
 
-  // Charge le nombre de notifs non lues + écoute realtime
   useEffect(() => {
     if (!user) return
-    
-    // Demander permission notifs au chargement
     requestNotificationPermission()
-    
     loadUnread()
     
     const channel = supabase
@@ -56,7 +51,6 @@ function MainApp() {
         { event: 'INSERT', schema: 'public', table: 'notifications', filter: `recipient_id=eq.${user.id}` },
         (payload) => {
           loadUnread()
-          // Afficher notif push locale
           const n = payload.new
           showLocalNotification(n.title, { body: n.body, tag: 'notif-' + n.id })
         }
@@ -86,7 +80,7 @@ function MainApp() {
   if (!user) return <Navigate to="/login" replace />
 
   const titles = {
-    calendar: 'Planning',
+    calendar: 'Calendrier',
     notes: 'Notes',
     settings: 'Paramètres',
     admin: 'Admin'
@@ -114,7 +108,7 @@ function MainApp() {
       <nav className="bottom-nav">
         <button className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}>
           <CalendarDays size={22} />
-          <span>Planning</span>
+          <span>Calendrier</span>
         </button>
         <button className={tab === 'notes' ? 'active' : ''} onClick={() => setTab('notes')}>
           <StickyNote size={22} />
