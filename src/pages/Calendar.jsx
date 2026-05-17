@@ -3,8 +3,8 @@ import { ChevronLeft, ChevronRight, Plus, Upload, Users } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { 
-  buildMonthGrid, getWeekDays, getWeekDaysLong, fmtDate, fmtTime,
-  isSameDay, isSameMonth, isToday, addMonths, subMonths, addDays
+  buildMonthGrid, getWeekDays, fmtDate, fmtTime,
+  isSameMonth, isToday, addMonths, subMonths, addDays
 } from '../lib/dateUtils'
 import EventModal from '../components/EventModal'
 import ImportICSModal from '../components/ImportICSModal'
@@ -38,14 +38,42 @@ export default function Calendar() {
 
   async function loadEvents() {
     setLoading(true)
-    const { data } = await supabase
-      .from('events')
-      .select('*')
-      .order('start_at', { ascending: true })
-    if (data) {
-      setEvents(data)
-      rescheduleAllReminders(data.filter(e => e.user_id === profile.id && e.reminder_minutes !== null))
+    
+    // Charger par pages de 1000 pour contourner la limite Supabase
+    const pageSize = 1000
+    let all = []
+    let from = 0
+    let keepGoing = true
+    
+    while (keepGoing) {
+      const { data, error } = await supabase
+        .from('events')
+        .select('*')
+        .order('start_at', { ascending: true })
+        .range(from, from + pageSize - 1)
+      
+      if (error) {
+        console.error('Erreur chargement events:', error)
+        break
+      }
+      
+      if (data && data.length > 0) {
+        all = all.concat(data)
+        if (data.length < pageSize) {
+          keepGoing = false
+        } else {
+          from += pageSize
+        }
+      } else {
+        keepGoing = false
+      }
+      
+      // Sécurité : pas plus de 20 pages (20 000 events)
+      if (from > 20000) keepGoing = false
     }
+    
+    setEvents(all)
+    rescheduleAllReminders(all.filter(e => e.user_id === profile.id && e.reminder_minutes !== null))
     setLoading(false)
   }
 
@@ -65,7 +93,7 @@ export default function Calendar() {
       setView('day')
     } else {
       setSelectedDate(day)
-      setEditingEvent({ start_at: day.toISOString(), end_at: day.toISOString(), all_day: false, shared: false, color: profile?.default_event_color || '#6366f1' })
+      setEditingEvent({ start_at: day.toISOString(), end_at: day.toISOString(), all_day: false, shared: false, color: profile?.default_event_color || '#f56565' })
     }
   }
 
@@ -80,7 +108,7 @@ export default function Calendar() {
       end_at: end.toISOString(),
       all_day: false,
       shared: false,
-      color: profile?.default_event_color || '#6366f1'
+      color: profile?.default_event_color || '#f56565'
     })
   }
 
@@ -135,7 +163,7 @@ export default function Calendar() {
 
       <button 
         onClick={() => setShowImport(true)}
-        style={{ position: 'fixed', bottom: 'calc(75px + var(--safe-bottom))', left: '1rem', width: '48px', height: '48px', borderRadius: '50%', background: 'white', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', zIndex: 15 }}
+        style={{ position: 'fixed', bottom: 'calc(85px + var(--safe-bottom))', left: '1.25rem', width: '52px', height: '52px', borderRadius: '50%', background: 'white', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(245, 101, 101, 0.15)', zIndex: 15, color: 'var(--primary)' }}
         aria-label="Importer"
       >
         <Upload size={20} />
@@ -223,7 +251,7 @@ function WeekView({ currentDate, setCurrentDate, weekStartsOn, getEventsForDay, 
           const dayEvents = getEventsForDay(d)
           return (
             <div key={d.toISOString()} className="day-view" style={{ cursor: 'pointer' }} onClick={() => onDayClick(d)}>
-              <div className="day-view-header" style={{ background: isToday(d) ? 'var(--primary)' : '#f9fafb', color: isToday(d) ? 'white' : 'var(--text)' }}>
+              <div className="day-view-header" style={{ background: isToday(d) ? 'var(--gradient)' : '#f9fafb', color: isToday(d) ? 'white' : 'var(--text)' }}>
                 {fmtDate(d, 'EEEE d MMMM')}
               </div>
               <div className="day-events">
@@ -289,7 +317,7 @@ function DayView({ currentDate, setCurrentDate, events, onEventClick }) {
 
 function AgendaView({ events, onEventClick }) {
   const now = new Date()
-  const upcoming = events.filter(e => new Date(e.end_at) >= now).slice(0, 50)
+  const upcoming = events.filter(e => new Date(e.end_at) >= now).slice(0, 200)
   
   const grouped = {}
   upcoming.forEach(e => {
