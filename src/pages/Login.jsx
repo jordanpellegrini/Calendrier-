@@ -26,7 +26,7 @@ export default function Login() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <h1>Planning Couple</h1>
+        <h1>Calendrier</h1>
         <p className="subtitle">Connecte-toi à ton compte</p>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
