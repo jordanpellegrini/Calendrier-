@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { CalendarDays, StickyNote, Bell, Settings as SettingsIcon, Shield } from 'lucide-react'
 import { AuthProvider, useAuth } from './hooks/useAuth'
@@ -19,6 +19,10 @@ import BiometricLock from './components/BiometricLock'
 
 import './styles/global.css'
 
+// Délai de grâce avant reverrouillage : permet d'ouvrir un sélecteur
+// de fichiers ou un dialogue système sans devoir se re-authentifier.
+const LOCK_GRACE_PERIOD_MS = 60 * 1000 // 60 secondes
+
 function MainApp() {
   const { user, profile, loading } = useAuth()
   const [tab, setTab] = useState('calendar')
@@ -26,14 +30,22 @@ function MainApp() {
   const [showNotifs, setShowNotifs] = useState(false)
   const [installPrompt, setInstallPrompt] = useState(null)
   
-  // État du verrou biométrique
   const [locked, setLocked] = useState(() => isBiometricEnabled())
+  const hiddenAtRef = useRef(null)
 
-  // Quand l'app revient au premier plan, on reverrouille si biométrie activée
+  // Reverrouillage intelligent : seulement après 60s d'absence
   useEffect(() => {
     function handleVisibility() {
-      if (document.visibilityState === 'visible' && isBiometricEnabled()) {
-        setLocked(true)
+      if (!isBiometricEnabled()) return
+      
+      if (document.visibilityState === 'hidden') {
+        hiddenAtRef.current = Date.now()
+      } else if (document.visibilityState === 'visible') {
+        const hiddenAt = hiddenAtRef.current
+        if (hiddenAt && (Date.now() - hiddenAt) > LOCK_GRACE_PERIOD_MS) {
+          setLocked(true)
+        }
+        hiddenAtRef.current = null
       }
     }
     document.addEventListener('visibilitychange', handleVisibility)
@@ -95,7 +107,6 @@ function MainApp() {
 
   if (!user) return <Navigate to="/login" replace />
 
-  // Écran de déverrouillage biométrique
   if (locked) {
     return <BiometricLock onUnlock={() => setLocked(false)} />
   }
