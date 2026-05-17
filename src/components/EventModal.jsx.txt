@@ -1,0 +1,456 @@
+import { useState } from 'react'
+import { X, Trash2, Repeat } from 'lucide-react'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../hooks/useAuth'
+import { COLORS, REMINDER_OPTIONS } from '../lib/dateUtils'
+import { RECURRENCE_PRESETS, describeRecurrence } from '../lib/recurrence'
+
+export default function EventModal({ event, onClose, onSaved }) {
+  const { user, profile } = useAuth()
+  const isVirtual = event._virtualOccurrence === true
+  const isNew = !event.id || isVirtual
+  const realEventId = isVirtual ? event._originalId : event.id
+  const canEdit = isNew || event.user_id === user.id || event.shared === true
+
+  const [form, setForm] = useState({
+    title: event.title || '',
+    description: event.description || '',
+    location: event.location || '',
+    start_at: toLocalInputValue(event.start_at),
+    end_at: toLocalInputValue(event.end_at),
+    all_day: event.all_day || false,
+    color: event.color || profile?.default_event_color || '#f56565',
+    shared: event.shared || false,
+    reminder_minutes: event.reminder_minutes ?? null,
+    recurrence_rule: event.recurrence_rule || null
+  })
+  const [showCustomRecur, setShowCustomRecur] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  function toLocalInputValue(iso) {
+    if (!iso) return ''
+    const d = new Date(iso)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  function toLocalDateValue(iso) {
+    if (!iso) return ''
+    const d = new Date(iso)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+  }
+
+  async function handleSave() {
+    if (!form.title.trim()) {
+      setError('Titre requis')
+      return
+    }
+    setSaving(true)
+    setError('')
+
+    const payload = {
+      title: form.title.trim(),
+      description: form.description.trim() || null,
+      location: form.location.trim() || null,
+      start_at: new Date(form.start_at).toISOString(),
+      end_at: new Date(form.end_at).toISOString(),
+      all_day: form.all_day,
+      color: form.color,
+      shared: form.shared,
+      reminder_minutes: form.reminder_minutes,
+      recurrence_rule: form.recurrence_rule
+    }
+
+    if (isNew) {
+      payload.user_id = user.id
+      const { error } = await supabase.from('events').insert(payload)
+      if (error) setError(error.message)
+      else onSaved()
+    } else {
+      // Si c'est une occurrence virtuelle d'événement récurrent qu'on a modifiée,
+      // on demande si on veut modifier toute la série ou juste cette occurrence
+      const isRecurring = !!event.recurrence_rule
+      if (isRecurring) {
+        const choice = await askEditScope()
+        if (choice === 'cancel') { setSaving(false); return }
+        
+        if (choice === 'series') {
+          // Modifier tous les events de la série
+          const { error } = await supabase.from('events').update(payload).eq('id', realEventId)
+          if (error) setError(error.message)
+          else onSaved()
+        } else {
+          // Modifier uniquement cette occurrence : on ajoute la date aux exceptions du parent
+          // et on crée un nouvel event "standalone" sans recurrence_rule
+          const occDate = event.occurrence_date || event.start_at.substring(0, 10)
+          
+          // Ajouter la date aux exceptions du parent
+          const { data: parent } = await supabase
+            .from('events')
+            .select('exception_dates')
+            .eq('id', realEventId)
+            .single()
+          
+          const newExceptions = [...(parent?.exception_dates || []), occDate]
+          await supabase.from('events').update({ exception_dates: newExceptions }).eq('id', realEventId)
+          
+          // Créer la nouvelle occurrence modifiée
+          payload.user_id = user.id
+          payload.recurrence_rule = null // c'est juste une occurrence isolée
+          payload.parent_event_id = realEventId
+          payload.occurrence_date = occDate
+          const { error } = await supabase.from('events').insert(payload)
+          if (error) setError(error.message)
+          else onSaved()
+        }
+      } else {
+        // Event simple
+        const { error } = await supabase.from('events').update(payload).eq('id', realEventId)
+        if (error) setError(error.message)
+        else onSaved()
+      }
+    }
+    setSaving(false)
+  }
+
+  async function askEditScope() {
+    return new Promise((resolve) => {
+      const result = window.prompt(
+        'Modifier cet événement récurrent :\n' +
+        '1 = uniquement cette occurrence\n' +
+        '2 = toute la série\n' +
+        'Annuler = retour\n\nTape 1 ou 2 :'
+      )
+      if (result === '1') resolve('one')
+      else if (result === '2') resolve('series')
+      else resolve('cancel')
+    })
+  }
+
+  async function handleDelete() {
+    const isRecurring = !!event.recurrence_rule
+    
+    if (isRecurring && isVirtual) {
+      const result = window.prompt(
+        'Supprimer cet événement récurrent :\n' +
+        '1 = uniquement cette occurrence\n' +
+        '2 = toute la série\n' +
+        'Annuler = retour\n\nTape 1 ou 2 :'
+      )
+      if (result === '1') {
+        // Ajouter la date aux exceptions
+        const occDate = event.occurrence_date || event.start_at.substring(0, 10)
+        const { data: parent } = await supabase
+          .from('events')
+          .select('exception_dates')
+          .eq('id', realEventId)
+          .single()
+        const newExceptions = [...(parent?.exception_dates || []), occDate]
+        await supabase.from('events').update({ exception_dates: newExceptions }).eq('id', realEventId)
+        onSaved()
+      } else if (result === '2') {
+        if (!confirm('Supprimer toute la série ?')) return
+        await supabase.from('events').delete().eq('id', realEventId)
+        onSaved()
+      }
+    } else {
+      if (!confirm('Supprimer cet événement ?')) return
+      await supabase.from('events').delete().eq('id', realEventId)
+      onSaved()
+    }
+  }
+
+  const isOwner = isNew || event.user_id === user.id
+
+  function applyPreset(preset) {
+    setForm({...form, recurrence_rule: preset})
+    setShowCustomRecur(false)
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{isNew && !isVirtual ? 'Nouvel événement' : isOwner ? 'Modifier' : 'Événement partagé'}</h2>
+          <button onClick={onClose} className="icon-btn"><X size={20} /></button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group">
+            <label>Titre *</label>
+            <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} disabled={!canEdit} />
+          </div>
+
+          <div className="toggle-row">
+            <label>Toute la journée</label>
+            <label className="toggle">
+              <input type="checkbox" checked={form.all_day} onChange={e => setForm({...form, all_day: e.target.checked})} disabled={!canEdit} />
+              <span className="toggle-slider"></span>
+            </label>
+          </div>
+
+          {form.all_day ? (
+            <>
+              <div className="form-group">
+                <label>Date début</label>
+                <input type="date" value={toLocalDateValue(form.start_at)} onChange={e => setForm({...form, start_at: e.target.value + 'T00:00'})} disabled={!canEdit} />
+              </div>
+              <div className="form-group">
+                <label>Date fin</label>
+                <input type="date" value={toLocalDateValue(form.end_at)} onChange={e => setForm({...form, end_at: e.target.value + 'T23:59'})} disabled={!canEdit} />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="form-group">
+                <label>Début</label>
+                <input type="datetime-local" value={form.start_at} onChange={e => setForm({...form, start_at: e.target.value})} disabled={!canEdit} />
+              </div>
+              <div className="form-group">
+                <label>Fin</label>
+                <input type="datetime-local" value={form.end_at} onChange={e => setForm({...form, end_at: e.target.value})} disabled={!canEdit} />
+              </div>
+            </>
+          )}
+
+          <div className="form-group">
+            <label>Lieu</label>
+            <input value={form.location} onChange={e => setForm({...form, location: e.target.value})} disabled={!canEdit} />
+          </div>
+
+          <div className="form-group">
+            <label>Description</label>
+            <textarea rows={3} value={form.description} onChange={e => setForm({...form, description: e.target.value})} disabled={!canEdit} />
+          </div>
+
+          {/* RÉCURRENCE */}
+          <div className="form-group">
+            <label><Repeat size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} /> Répétition</label>
+            <select
+              value={JSON.stringify(form.recurrence_rule)}
+              onChange={e => {
+                if (e.target.value === 'custom') {
+                  setShowCustomRecur(true)
+                } else {
+                  const preset = RECURRENCE_PRESETS.find(p => JSON.stringify(p.value) === e.target.value)
+                  if (preset) applyPreset(preset.value)
+                }
+              }}
+              disabled={!canEdit}
+            >
+              {RECURRENCE_PRESETS.map((p, i) => (
+                <option key={i} value={JSON.stringify(p.value)}>{p.label}</option>
+              ))}
+              <option value="custom">Personnalisé...</option>
+            </select>
+            {form.recurrence_rule && (
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                {describeRecurrence(form.recurrence_rule)}
+              </p>
+            )}
+          </div>
+
+          {showCustomRecur && canEdit && (
+            <CustomRecurrenceEditor
+              rule={form.recurrence_rule || { freq: 'weekly', interval: 1, end: { type: 'never' } }}
+              startDate={form.start_at}
+              onChange={(rule) => setForm({...form, recurrence_rule: rule})}
+              onClose={() => setShowCustomRecur(false)}
+            />
+          )}
+
+          <div className="form-group">
+            <label>Rappel</label>
+            <select value={form.reminder_minutes ?? ''} onChange={e => setForm({...form, reminder_minutes: e.target.value === '' ? null : Number(e.target.value)})} disabled={!canEdit}>
+              {REMINDER_OPTIONS.map(opt => (
+                <option key={opt.label} value={opt.value ?? ''}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Couleur</label>
+            <div className="color-picker">
+              {COLORS.map(c => (
+                <div
+                  key={c.value}
+                  className={`color-swatch ${form.color === c.value ? 'selected' : ''}`}
+                  style={{ background: c.value }}
+                  onClick={() => canEdit && setForm({...form, color: c.value})}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="toggle-row">
+            <label>Partager avec mon partenaire</label>
+            <label className="toggle">
+              <input type="checkbox" checked={form.shared} onChange={e => setForm({...form, shared: e.target.checked})} disabled={!isOwner} />
+              <span className="toggle-slider"></span>
+            </label>
+          </div>
+
+          {!isOwner && form.shared && (
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+              💡 Cet événement t'a été partagé. Tu peux le modifier et le supprimer.
+            </p>
+          )}
+
+          {error && <p className="error">{error}</p>}
+        </div>
+        <div className="modal-footer">
+          {!isNew && canEdit && (
+            <button className="btn-danger" onClick={handleDelete} style={{ flex: '0 0 auto' }}>
+              <Trash2 size={18} />
+            </button>
+          )}
+          <button className="btn-secondary" onClick={onClose}>Annuler</button>
+          {canEdit && (
+            <button className="btn-primary" onClick={handleSave} disabled={saving}>
+              {saving ? '...' : 'Enregistrer'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CustomRecurrenceEditor({ rule, startDate, onChange, onClose }) {
+  const [freq, setFreq] = useState(rule.freq || 'weekly')
+  const [interval, setInterval] = useState(rule.interval || 1)
+  const [days, setDays] = useState(rule.days || [new Date(startDate).getDay()])
+  const [endType, setEndType] = useState(rule.end?.type || 'never')
+  const [endUntil, setEndUntil] = useState(rule.end?.until || '')
+  const [endCount, setEndCount] = useState(rule.end?.count || 10)
+  const [monthDay, setMonthDay] = useState(rule.monthDay || 'date')
+
+  const daysFr = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam']
+  const startDay = new Date(startDate).getDay()
+  const startDate_ = new Date(startDate)
+  const weekOfMonth = Math.ceil(startDate_.getDate() / 7)
+  const weekOfMonthFr = ['1er', '2ème', '3ème', '4ème', '5ème'][weekOfMonth - 1]
+
+  function toggleDay(d) {
+    if (days.includes(d)) setDays(days.filter(x => x !== d))
+    else setDays([...days, d].sort())
+  }
+
+  function apply() {
+    const newRule = {
+      freq,
+      interval: Number(interval) || 1,
+      end: { type: endType }
+    }
+    if (freq === 'weekly') newRule.days = days.length > 0 ? days : [startDay]
+    if (freq === 'monthly') newRule.monthDay = monthDay
+    if (endType === 'until') newRule.end.until = endUntil
+    if (endType === 'count') newRule.end.count = Number(endCount) || 10
+    onChange(newRule)
+    onClose()
+  }
+
+  return (
+    <div style={{ background: 'var(--border-soft)', padding: '1rem', borderRadius: '12px', marginBottom: '1rem' }}>
+      <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', fontWeight: 600 }}>Répétition personnalisée</h4>
+      
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.85rem' }}>Tous les</span>
+        <input
+          type="number"
+          min="1"
+          value={interval}
+          onChange={e => setInterval(e.target.value)}
+          style={{ width: '60px', padding: '0.4rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+        />
+        <select
+          value={freq}
+          onChange={e => setFreq(e.target.value)}
+          style={{ padding: '0.4rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+        >
+          <option value="daily">jour(s)</option>
+          <option value="weekly">semaine(s)</option>
+          <option value="monthly">mois</option>
+          <option value="yearly">an(s)</option>
+        </select>
+      </div>
+
+      {freq === 'weekly' && (
+        <div style={{ marginBottom: '0.75rem' }}>
+          <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>Jours :</div>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {daysFr.map((d, i) => (
+              <button
+                key={i}
+                onClick={() => toggleDay(i)}
+                style={{
+                  padding: '0.4rem 0.6rem',
+                  borderRadius: '8px',
+                  background: days.includes(i) ? 'var(--gradient)' : 'white',
+                  color: days.includes(i) ? 'white' : 'var(--text)',
+                  border: '1px solid var(--border)',
+                  fontSize: '0.8rem',
+                  fontWeight: 600
+                }}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {freq === 'monthly' && (
+        <div style={{ marginBottom: '0.75rem' }}>
+          <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>Le :</div>
+          <select
+            value={monthDay}
+            onChange={e => setMonthDay(e.target.value)}
+            style={{ width: '100%', padding: '0.4rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+          >
+            <option value="date">Le {startDate_.getDate()} du mois</option>
+            <option value="weekday">Le {weekOfMonthFr} {daysFr[startDay].toLowerCase()} du mois</option>
+          </select>
+        </div>
+      )}
+
+      <div style={{ marginTop: '0.75rem' }}>
+        <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>Se termine :</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+            <input type="radio" checked={endType === 'never'} onChange={() => setEndType('never')} />
+            Jamais
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+            <input type="radio" checked={endType === 'until'} onChange={() => setEndType('until')} />
+            Le
+            <input
+              type="date"
+              value={endUntil}
+              onChange={e => { setEndUntil(e.target.value); setEndType('until') }}
+              style={{ padding: '0.3rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+            />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+            <input type="radio" checked={endType === 'count'} onChange={() => setEndType('count')} />
+            Après
+            <input
+              type="number"
+              min="1"
+              value={endCount}
+              onChange={e => { setEndCount(e.target.value); setEndType('count') }}
+              style={{ width: '60px', padding: '0.3rem', borderRadius: '6px', border: '1px solid var(--border)' }}
+            />
+            occurrences
+          </label>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+        <button onClick={onClose} className="btn-secondary" style={{ flex: 1, padding: '0.5rem' }}>Annuler</button>
+        <button onClick={apply} className="btn-primary" style={{ flex: 1, padding: '0.5rem' }}>Appliquer</button>
+      </div>
+    </div>
+  )
+}
