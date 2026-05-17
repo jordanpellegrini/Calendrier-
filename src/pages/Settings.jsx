@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { LogOut, Download, Bell, Link2, Fingerprint } from 'lucide-react'
+import { LogOut, Download, Bell, Link2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { COLORS, NOTE_COLORS } from '../lib/dateUtils'
@@ -147,6 +147,23 @@ export default function Settings({ installPrompt, onInstall }) {
       </div>
 
       <div className="settings-section">
+        <h3>Ma couleur signature</h3>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 0.75rem' }}>
+          Cette couleur apparaît en bordure de tous les événements que tu crées, pour que ton partenaire sache qui les a ajoutés.
+        </p>
+        <div className="color-picker">
+          {COLORS.map(c => (
+            <div
+              key={c.value}
+              className={`color-swatch ${profile?.signature_color === c.value ? 'selected' : ''}`}
+              style={{ background: c.value }}
+              onClick={() => updateProfile({ signature_color: c.value })}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-section">
         <h3>Sécurité</h3>
         <div className="settings-row">
           <div className="label">
@@ -165,11 +182,6 @@ export default function Settings({ installPrompt, onInstall }) {
           )}
         </div>
         {bioMsg && <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>{bioMsg}</p>}
-        {!bioAvailable && (
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-            La biométrie nécessite Android 9+ ou iOS 16+, et un appareil avec empreinte/Face Unlock configuré. Sur PWA installée pour de meilleurs résultats.
-          </p>
-        )}
       </div>
 
       <div className="settings-section">
